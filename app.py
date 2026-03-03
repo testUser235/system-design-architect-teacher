@@ -1,5 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
+import time
 
 # Configure API key
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -33,21 +34,69 @@ model = genai.GenerativeModel(
     """
 )
 
-# Initialize chat history in session
+# ─── Session state setup ───────────────────────────────────────────
 if "chat" not in st.session_state:
     st.session_state.chat = model.start_chat(history=[])
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat history
+if "message_count" not in st.session_state:
+    st.session_state.message_count = 0
+
+if "last_message_time" not in st.session_state:
+    st.session_state.last_message_time = 0
+
+# ─── Sidebar with reset button & stats ────────────────────────────
+with st.sidebar:
+    st.header("⚙️ Controls")
+    if st.button("🔄 Reset Conversation"):
+        st.session_state.chat = model.start_chat(history=[])
+        st.session_state.messages = []
+        st.session_state.message_count = 0
+        st.session_state.last_message_time = 0
+        st.success("Conversation reset!")
+        st.rerun()
+
+    st.divider()
+    st.metric("Messages sent", st.session_state.message_count)
+    st.caption("Max 50 messages per session")
+    st.caption("Max 500 characters per message")
+
+# ─── Display chat history ──────────────────────────────────────────
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Chat input
+# ─── Chat input ────────────────────────────────────────────────────
 if prompt := st.chat_input("Enter a system design topic..."):
-    
+
+    # Guardrail 1 — Empty input check
+    if not prompt.strip():
+        st.warning("⚠️ Please enter a topic!")
+        st.stop()
+
+    # Guardrail 2 — Input length limit
+    if len(prompt) > 500:
+        st.warning(f"⚠️ Your message is {len(prompt)} characters. Please keep it under 500!")
+        st.stop()
+
+    # Guardrail 3 — Rate limiting (max 1 message per 3 seconds)
+    current_time = time.time()
+    time_since_last = current_time - st.session_state.last_message_time
+    if time_since_last < 3:
+        st.warning(f"⚠️ Slow down! Please wait {3 - int(time_since_last)} seconds before sending again.")
+        st.stop()
+
+    # Guardrail 4 — Max messages per session
+    if st.session_state.message_count >= 50:
+        st.error("⚠️ You've reached the 50 message limit. Please reset the conversation!")
+        st.stop()
+
+    # Update tracking
+    st.session_state.last_message_time = current_time
+    st.session_state.message_count += 1
+
     # Show user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -63,6 +112,6 @@ if prompt := st.chat_input("Enter a system design topic..."):
                 st.session_state.messages.append({"role": "assistant", "content": reply})
             except Exception as e:
                 if "429" in str(e):
-                    st.error("Quota exceeded. Please wait a moment and try again.")
+                    st.error("⚠️ Quota exceeded. Please wait a moment and try again.")
                 else:
-                    st.error(f"An error occurred: {e}")
+                    st.error(f"⚠️ An error occurred: {e}")
